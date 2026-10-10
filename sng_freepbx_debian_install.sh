@@ -1304,7 +1304,38 @@ else
   fwconsole ma installlocal >> "$log"
 
   setCurrentStep "Upgrading FreePBX 17 modules"
-  fwconsole ma upgradeall >> "$log"
+
+  # "Retrieved Module XML Was Empty" usually means the module repository
+  # metadata could not be retrieved (DNS/network/proxy/repository configuration),
+  # not that the module XML should be ignored. Refresh signatures and retry once.
+  upgradeall_ok=false
+  for attempt in 1 2; do
+    message "Running FreePBX module upgrade (attempt ${attempt}/2)..."
+    if fwconsole ma upgradeall >> "$log" 2>&1; then
+      upgradeall_ok=true
+      break
+    fi
+
+    if [ "$attempt" -eq 1 ]; then
+      message "Module upgrade failed; refreshing signatures and checking repository access before retry..."
+      set +e
+      fwconsole ma refreshsignatures >> "$log" 2>&1
+      sig_status=$?
+      fwconsole ma listonline >> "$log" 2>&1
+      list_status=$?
+      set -e
+      log "Recovery diagnostics: refreshsignatures exit=${sig_status}; listonline exit=${list_status}"
+      sleep 3
+    fi
+  done
+
+  if [ "$upgradeall_ok" != true ]; then
+    message "ERROR: FreePBX module upgrade failed after recovery retry."
+    message "The installer will stop rather than report a successful but incomplete installation."
+    message "Check module repository/DNS/HTTPS access and the log: ${LOG_FILE}"
+    message "Useful checks: getent hosts mirror.freepbx.org; curl -I --connect-timeout 10 https://mirror.freepbx.org/"
+    exit 2
+  fi
 
   setCurrentStep "Reloading and restarting FreePBX 17"
   fwconsole reload >> "$log"
